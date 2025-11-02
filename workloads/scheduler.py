@@ -1,40 +1,49 @@
-from small_job import Job
-from gpu_cluster import GPUCluster
+import time
+import random
+import threading
+
+
+class Job:
+    def __init__(self, job_id, runtime):
+        self.job_id = job_id
+        self.runtime = runtime
+
 
 class Scheduler:
-    def __init__(self):
-        self.cluster = GPUCluster()
-        self.job_queue = []
-        self.running_jobs = []
-        self.completed_jobs = []
+    def __init__(self, name, speed_factor=1.0, use_sjf=False):
+        self.name = name
+        self.speed_factor = speed_factor
+        self.use_sjf = use_sjf
+        self.jobs = []
+        self.usage_history = []
+        self.total_time = 0
+        self.running = False
 
-    def submit_job(self, job: Job):
-        print(f"Submitting job {job.job_id}")
-        self.job_queue.append(job)
-        self.schedule()
+    def submit(self, job):
+        self.jobs.append(job)
 
-    def schedule(self):
-        for job in list(self.job_queue):  # iterate over a copy
-            if self.cluster.allocate_resources(job.gpu_req, job.mem_req):
-                self.job_queue.remove(job)
-                self.running_jobs.append(job)
-                job.run(self.cluster, self.on_job_complete)
+    def run(self):
+        if not self.jobs:
+            return
 
-    def on_job_complete(self, job: Job):
-        self.running_jobs.remove(job)
-        self.completed_jobs.append(job)
-        print(f"Job {job.job_id} completed.")
-        self.schedule()  # try to run next queued job
+        if self.use_sjf:
+            # Sort by runtime (shortest job first)
+            self.jobs.sort(key=lambda j: j.runtime)
 
-    def get_status(self):
-        return {
-            "queued": len(self.job_queue),
-            "running": len(self.running_jobs),
-            "completed": len(self.completed_jobs),
-            "available_gpus": self.cluster.available_gpus,
-            "available_mem": self.cluster.available_mem,
-            "total_gpus": self.cluster.total_gpus,
-            "total_mem": self.cluster.total_mem,
-        }
+        start_time = time.time()
+        self.running = True
 
-scheduler = Scheduler()
+        for job in self.jobs:
+            usage = random.randint(40, 100)
+            self.usage_history.append(usage)
+
+            # Simulate processing time (scaled by speed)
+            simulated_runtime = job.runtime * self.speed_factor
+            time.sleep(simulated_runtime * 0.2)
+
+        self.total_time = round(time.time() - start_time, 2)
+        self.running = False
+        print(f"{self.name} finished in {self.total_time} seconds")
+
+    def get_usage(self):
+        return self.usage_history
