@@ -1,91 +1,40 @@
-# scheduler.py
-# Greedy priority-aware scheduler with runtime simulation using threads
-
-from operator import attrgetter
-from threading import Thread, Lock
-import time
+from small_job import Job
+from gpu_cluster import GPUCluster
 
 class Scheduler:
-    def __init__(self, gpu_nodes):
-        self.gpu_nodes = gpu_nodes
-        self.queue = []
-        self.jobs = {}          # job_id -> job
-        self.lock = Lock()
-        self._stop = False
+    def __init__(self):
+        self.cluster = GPUCluster()
+        self.job_queue = []
+        self.running_jobs = []
+        self.completed_jobs = []
 
-    def submit_job(self, job):
-        with self.lock:
-            self.queue.append(job)
-            self.jobs[job.job_id] = job
-        return job.job_id
+    def submit_job(self, job: Job):
+        print(f"Submitting job {job.job_id}")
+        self.job_queue.append(job)
+        self.schedule()
 
-    def schedule_once(self):
-        # Try to schedule queued jobs.
-        with self.lock:
-            # consider only QUEUED jobs
-            queued = [j for j in self.queue if j.state == "QUEUED"]
-            # sort by priority desc then by runtime desc (larger first helps packing)
-            queued.sort(key=lambda j: (j.priority, j.runtime_seconds), reverse=True)
-        for job in queued:
-            placed = False
-            # sort nodes by available_mem descending (pack on bigger free first)
-            nodes = sorted(self.gpu_nodes, key=lambda n: n.available_mem, reverse=True)
-            for node in nodes:
-                if node.allocate(job):
-                    placed = True
-                    # start runtime simulation thread
-                    t = Thread(target=self._run_job_thread, args=(job, node), daemon=True)
-                    t.start()
-                    print(f"[{time.strftime('%X')}] SCHEDULED {job.job_id} -> node {node.node_id} (mem {job.gpu_mem}, cores {job.gpu_cores}, rt {job.runtime_seconds}s)")
-                    break
-            if placed:
-                # remove from queue list (it remains in jobs dict)
-                with self.lock:
-                    if job in self.queue:
-                        self.queue.remove(job)
-            else:
-                # cannot place now
-                pass
+    def schedule(self):
+        for job in list(self.job_queue):  # iterate over a copy
+            if self.cluster.allocate_resources(job.gpu_req, job.mem_req):
+                self.job_queue.remove(job)
+                self.running_jobs.append(job)
+                job.run(self.cluster, self.on_job_complete)
 
-    def _run_job_thread(self, job, node):
-        try:
-            job.start_time = time.time()
-            # simulate progress by sleeping in small increments (to let UI show intermediate util)
-            remaining = job.runtime_seconds
-            step = 1
-            while remaining > 0:
-                time.sleep(min(step, remaining))
-                remaining -= step
-                # append node util snapshot so history updates during run
-                node._append_history()
-                if job.state == "CANCELLED":
-                    # early exit
-                    break
-            # finished normally -> release
-            node.release(job)
-            print(f"[{time.strftime('%X')}] COMPLETED {job.job_id} on node {node.node_id}")
-        except Exception as e:
-            job.state = "FAILED"
-            print(f"Job {job.job_id} failed: {e}")
+    def on_job_complete(self, job: Job):
+        self.running_jobs.remove(job)
+        self.completed_jobs.append(job)
+        print(f"Job {job.job_id} completed.")
+        self.schedule()  # try to run next queued job
 
-    def cancel_job(self, job_id):
-        with self.lock:
-            job = self.jobs.get(job_id)
-            if not job:
-                return False
-            # if queued remove
-            if job in self.queue:
-                self.queue.remove(job)
-                job.state = "CANCELLED"
-                return True
-            # if running mark cancelled (the runtime thread checks this)
-            job.state = "CANCELLED"
-            return True
+    def get_status(self):
+        return {
+            "queued": len(self.job_queue),
+            "running": len(self.running_jobs),
+            "completed": len(self.completed_jobs),
+            "available_gpus": self.cluster.available_gpus,
+            "available_mem": self.cluster.available_mem,
+            "total_gpus": self.cluster.total_gpus,
+            "total_mem": self.cluster.total_mem,
+        }
 
-    def all_jobs(self):
-        with self.lock:
-            return list(self.jobs.values())
-
-    def queue_length(self):
-        with self.lock:
-            return len(self.queue)
+scheduler = Scheduler()
