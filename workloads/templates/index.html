@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Scheduler Comparison</title>
+    <title>Scheduler Comparison (Numba vs Numba)</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body {
@@ -27,8 +27,10 @@
         button:hover {
             background: #0056b3;
         }
-
-        /* Layout container */
+        button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
         .container {
             display: flex;
             flex-direction: column;
@@ -36,14 +38,12 @@
             gap: 30px;
             margin-top: 30px;
         }
-
         .row {
             display: flex;
             justify-content: center;
             gap: 40px;
             flex-wrap: wrap;
         }
-
         .graph {
             width: 400px;
             background: white;
@@ -51,7 +51,6 @@
             border-radius: 10px;
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
         }
-
         canvas {
             width: 100%;
             height: 250px;
@@ -59,83 +58,129 @@
     </style>
 </head>
 <body>
-    <h1>CPU vs GPU vs GPU+SJF Scheduler Comparison</h1>
-    <button onclick="startJobs()">Run Schedulers</button>
+    <h1>Single-Core vs. Parallel-Core (Numba)</h1>
+    <button onclick="startJobs()" id="runButton">Run Schedulers</button>
 
     <div class="container">
-        <!-- Row 1: CPU -->
-        <div class="row">
+        <div class.row">
             <div class="graph">
-                <h2>CPU Scheduler</h2>
+                <h2>Single-Core (Numba)</h2>
                 <canvas id="cpuChart"></canvas>
             </div>
         </div>
-
-        <!-- Row 2: GPU and GPU+SJF -->
+        
         <div class="row">
             <div class="graph">
-                <h2>GPU Scheduler</h2>
+                <h2>Parallel-Core (Numba)</h2>
                 <canvas id="gpuChart"></canvas>
             </div>
             <div class="graph">
-                <h2>GPU + SJF Scheduler</h2>
+                <h2>Parallel-Core + SJF (Numba)</h2>
                 <canvas id="sjfChart"></canvas>
             </div>
         </div>
     </div>
 
     <script>
+        const chartConfig = (label, color) => ({
+            type: 'bar',
+            data: {
+                labels: [], // e.g., "Job 1", "Job 2"
+                datasets: [{
+                    label: label,
+                    data: [], // e.g., [0.1, 0.5, 0.2]
+                    backgroundColor: color,
+                }]
+            },
+            options: {
+                animation: false,
+                scales: {
+                    y: { 
+                        beginAtZero: true,
+                        title: { display: true, text: 'Job Runtime (seconds)' }
+                    },
+                    x: {
+                        title: { display: true, text: 'Job Queue' }
+                    }
+                }
+            }
+        });
+
         const charts = {
-            cpu: new Chart(document.getElementById('cpuChart'), {
-                type: 'line',
-                data: { labels: [], datasets: [{ label: 'CPU Usage %', data: [], borderColor: 'red', tension: 0.2 }] },
-                options: { animation: false, scales: { y: { min: 0, max: 100 } } }
-            }),
-            gpu: new Chart(document.getElementById('gpuChart'), {
-                type: 'line',
-                data: { labels: [], datasets: [{ label: 'GPU Usage %', data: [], borderColor: 'blue', tension: 0.2 }] },
-                options: { animation: false, scales: { y: { min: 0, max: 100 } } }
-            }),
-            sjf: new Chart(document.getElementById('sjfChart'), {
-                type: 'line',
-                data: { labels: [], datasets: [{ label: 'GPU+SJF Usage %', data: [], borderColor: 'green', tension: 0.2 }] },
-                options: { animation: false, scales: { y: { min: 0, max: 100 } } }
-            })
+            cpu: new Chart(document.getElementById('cpuChart'), chartConfig('Job Time (Single Core)', 'rgba(255, 99, 132, 0.7)')),
+            gpu: new Chart(document.getElementById('gpuChart'), chartConfig('Job Time (Parallel)', 'rgba(54, 162, 235, 0.7)')),
+            sjf: new Chart(document.getElementById('sjfChart'), chartConfig('Job Time (Parallel+SJF)', 'rgba(75, 192, 192, 0.7)'))
         };
 
+        const runButton = document.getElementById('runButton');
+
         async function startJobs() {
-            await fetch('/submit_job', { method: 'POST' });
-            updateCharts();
+            runButton.disabled = true;
+            runButton.textContent = "Running Simulation...";
+            
+            Object.values(charts).forEach(chart => {
+                chart.data.labels = [];
+                chart.data.datasets[0].data = [];
+                chart.update();
+                
+                const div = chart.canvas.parentElement;
+                let timeText = div.querySelector('.time');
+                if (timeText) timeText.textContent = "Starting...";
+            });
+
+            await fetch('/run_simulation', { method: 'POST' }); 
+            updateCharts(); 
         }
 
         async function updateCharts() {
             const res = await fetch('/usage_data');
             const data = await res.json();
+            let stillRunning = false;
 
             data.forEach(sched => {
                 let chart;
-                if (sched.name === "CPU") chart = charts.cpu;
-                else if (sched.name === "GPU") chart = charts.gpu;
-                else chart = charts.sjf;
+                if (sched.name === "Single-Core (Numba)") chart = charts.cpu;
+                else if (sched.name === "Parallel-Core (Numba)") chart = charts.gpu;
+                else if (sched.name === "Parallel-Core + SJF") chart = charts.sjf;
+                
+                if (!chart) return; 
 
-                chart.data.labels = sched.usage.map((_, i) => i + 1);
-                chart.data.datasets[0].data = sched.usage;
+                chart.data.labels = sched.job_times.map((_, i) => `Job ${i + 1}`);
+                chart.data.datasets[0].data = sched.job_times;
                 chart.update();
-
-                if (!sched.running && sched.total_time > 0) {
-                    const div = chart.canvas.parentElement;
-                    let timeText = div.querySelector('.time');
-                    if (!timeText) {
-                        timeText = document.createElement('p');
-                        timeText.classList.add('time');
-                        div.appendChild(timeText);
-                    }
+                
+                const div = chart.canvas.parentElement;
+                let timeText = div.querySelector('.time');
+                if (!timeText) {
+                    timeText = document.createElement('p');
+                    timeText.classList.add('time');
+                    div.appendChild(timeText);
+                }
+                
+                if (sched.running) {
+                    stillRunning = true;
+                    // --- THE FIX ---
+                    timeText.textContent = `Running... (Job ${sched.job_times.length + 1} / 20)`;
+                    // --- END FIX ---
+                    timeText.style.color = "blue";
+                } else if (sched.total_time > 0) {
                     timeText.textContent = `Total Time: ${sched.total_time} sec`;
+                    timeText.style.color = "black";
+                } else {
+                    timeText.textContent = "Idle";
+                    timeText.style.color = "grey";
                 }
             });
 
-            setTimeout(updateCharts, 1000);
+            if (stillRunning) {
+                setTimeout(updateCharts, 500);
+            } else {
+                runButton.disabled = false;
+                runButton.textContent = "Run Schedulers";
+            }
         }
+        
+        updateCharts();
     </script>
 </body>
 </html>
